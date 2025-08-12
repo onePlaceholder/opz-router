@@ -1,0 +1,65 @@
+#!/usr/bin/python3
+from subprocess import run, check_output
+
+NETWORK_IP = "192.168.15."
+
+def main() -> None:
+    run("echo \"net.ipv4.ip_forward=1\" | tee /etc/sysctl.d/99-router.conf")
+    run("sysctl --system")
+
+    setup_dhcp()
+    setup_ethernet()
+
+    run("netfilter-persistent save")
+    run("update-rc.d firstboot remove")
+    run("reboot")
+
+def setup_dhcp() -> None:
+    config = f"""
+    default-lease-time 600;
+    max-lease-time 7200;
+    authoritative;
+
+    subnet {NETWORK_IP}0 netmask 255.255.255.0 {{
+        range {NETWORK_IP}2 {NETWORK_IP}254;
+        option routers {NETWORK_IP}1;
+    }}
+    """
+    with open("/etc/dhcp/dhcpd.conf", "w") as f:
+        f.write(config)
+    
+    config = f"""
+    INTERFACESv4="{get_ethernet()}"
+    """
+    with open("/etc/default/isc-dhcp-server", "w") as f:
+        f.write(config)
+
+
+def setup_ethernet() -> None:
+    interface = get_ethernet()
+    run(f"""
+    nmcli connection add type ethernet \
+        ifname {interface} \
+        con-name {interface}_lan \
+        ipv4.method manual \
+        ipv4.addresses {NETWORK_IP}1/24 \
+        ipv6.method ignore
+    """)
+
+def get_ethernet() -> str:
+    try:
+        output = check_output(
+            ["nmcli", "-t", "-f", "DEVICE,TYPE", "device"],
+            universal_newlines=True
+        )
+        
+        for line in output.strip().split('\n'):
+            device, dev_type = line.split(':')
+            if dev_type == "ethernet":
+                return device
+
+    except subprocess.CalledProcessError:
+        pass
+
+if __name__ == "__main__":
+    main()
